@@ -161,6 +161,7 @@ banner() {
   echo "  logs:  tail -f $LOGFILE      stop:  $0 stop"
   echo
   echo "note: at --tp 2 with MTP, prefix reuse is disabled by design (answers are unaffected)."
+  echo "note: any client that pins this model's context length must be set to $CTX to match."
 }
 
 start_foreground() {
@@ -244,7 +245,7 @@ DAEMON=0
 for a in "$@"; do [[ "$a" == "--daemon" ]] && DAEMON=1; done
 
 case "$CMD" in
-  start)   if [[ "${DRY_RUN:-0}" == "1" ]]; then build_args; printf '%q ' "$BIN" "${ARGS[@]}"; echo; exit 0; fi
+  start)   if [[ "${DRY_RUN:-0}" == "1" ]]; then banner; build_args; printf '%q ' "$BIN" "${ARGS[@]}"; echo; exit 0; fi
            preflight; if [[ "$DAEMON" == "1" ]]; then start_daemon; else start_foreground; fi ;;
   stop)    stop_server ;;
   restart) stop_server; preflight; start_daemon ;;
