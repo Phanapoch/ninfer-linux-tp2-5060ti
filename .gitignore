@@ -57,3 +57,7 @@ dist/*
 
 # Out-of-tree experimental benches staged on this branch but not part of any PR yet.
 tools/phase2a/
+
+# Local run output written by tools/tp2/bench-tp2.sh and tools/tp2/probe-context.sh.
+bench/tp2-*/
+bench/ctx-*/
