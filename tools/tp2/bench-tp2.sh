@@ -16,7 +16,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN="${NINFER_BIN:-$ROOT/build/apps/ninfer}"
-ARTIFACT="${NINFER_ARTIFACT:-$HOME/projects/ninfer-5060ti/out/qwen3_8_27b_nvfp4.ninfer}"
+ARTIFACT="${NINFER_ARTIFACT:-/media/ice/data2/models/ninfer/qwen3_8_27b_nvfp4.ninfer}"
 TDEV="${NINFER_TDEV:-0,5}"
 PROMPT="${PROMPT:-Explain how photosynthesis works in detail.}"
 MAX_NEW=512

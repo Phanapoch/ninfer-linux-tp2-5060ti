@@ -27,7 +27,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN="${NINFER_BIN:-$ROOT/build/apps/ninfer-serve}"
-ARTIFACT="${ARTIFACT:-$HOME/projects/ninfer-5060ti/out/qwen3_8_27b_nvfp4.ninfer}"
+ARTIFACT="${ARTIFACT:-/media/ice/data2/models/ninfer/qwen3_8_27b_nvfp4.ninfer}"
 DEVICES="${DEVICES:-0,5}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8095}"
