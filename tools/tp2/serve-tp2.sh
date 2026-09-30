@@ -31,7 +31,7 @@ ARTIFACT="${ARTIFACT:-$HOME/projects/ninfer-5060ti/out/qwen3_8_27b_nvfp4.ninfer}
 DEVICES="${DEVICES:-0,5}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8095}"
-CTX="${CTX:-327680}"
+CTX="${CTX:-}"
 KV_DTYPE="${KV_DTYPE:-int8}"
 KV_CAP="${KV_CAP:-explicit}"
 MTP="${MTP:-3}"
@@ -39,6 +39,19 @@ ROPE="${ROPE:-yarn}"
 CONCURRENCY="${CONCURRENCY:-1}"
 API_KEY="${API_KEY:-}"
 EXTRA="${EXTRA:-}"
+VISION="${VISION:-0}"
+IMAGE_MAX_TOKENS="${IMAGE_MAX_TOKENS:-2048}"
+
+# Vision needs the image-capable rope path: the engine rejects --rope yarn together with
+# --vision (the encoder ropes 2-D image-grid positions), and native rope caps context at
+# the artifact's registered 262144. Vision also reserves GPU memory for its tower and
+# workspace, so the vision default context is lower than the text-only one.
+if [[ "$VISION" == "1" ]]; then
+  ROPE="native"
+  CTX="${CTX:-262144}"
+else
+  CTX="${CTX:-327680}"
+fi
 
 STATE_DIR="${STATE_DIR:-$HOME/.local/state/ninfer-tp2}"
 PIDFILE="$STATE_DIR/serve.pid"
@@ -59,6 +72,9 @@ build_args() {
         --max-concurrency "$CONCURRENCY")
   if [[ "$KV_CAP" == "auto" ]]; then ARGS+=(--kv-capacity auto); else ARGS+=(--kv-capacity "$CTX"); fi
   if [[ "$ROPE" == "yarn" ]]; then ARGS+=(--rope yarn --yarn-factor 4.0); fi
+  if [[ "$VISION" == "1" ]]; then
+    ARGS+=(--vision --image-max-tokens "$IMAGE_MAX_TOKENS")
+  fi
   if [[ "$MTP" != "0" ]]; then ARGS+=(--spec mtp --draft-tokens "$MTP"); fi
   [[ -n "$API_KEY" ]] && ARGS+=(--api-key "$API_KEY")
   if [[ -n "$EXTRA" ]]; then
@@ -101,6 +117,13 @@ preflight() {
   if [[ "$PORT" -ge 1 && "$PORT" -le 65535 ]]; then :; else
     die "--port must be in [1,65535] (got $PORT)"
   fi
+
+  if [[ "$VISION" == "1" && "$CTX" -gt 262144 ]]; then
+    die "VISION=1 uses --rope native, whose ceiling is 262144 (got CTX=$CTX)"
+  fi
+  if [[ "$VISION" == "1" && "$ROPE" != "native" ]]; then
+    die "VISION=1 requires ROPE=native (the engine rejects yarn together with --vision)"
+  fi
 }
 
 wait_healthy() {
@@ -121,6 +144,11 @@ banner() {
   echo
   echo "ninfer-serve up:  http://$HOST:$PORT"
   echo "  ctx=$CTX  kv=$KV_DTYPE  rope=$ROPE  mtp=$MTP  concurrency=$CONCURRENCY  devices=$DEVICES"
+  if [[ "$VISION" == "1" ]]; then
+    echo "  vision=ON (--image-max-tokens $IMAGE_MAX_TOKENS)  ← send images as image_url content parts"
+  else
+    echo "  vision=OFF (set VISION=1 to enable image input; that forces ROPE=native, ctx<=262144)"
+  fi
   echo "  health:  curl http://$HOST:$PORT/health"
   echo "  models:  curl http://$HOST:$PORT/v1/models"
   local auth=()
@@ -161,21 +189,41 @@ start_daemon() {
 }
 
 stop_server() {
-  [[ -f "$PIDFILE" ]] || { echo "no pidfile ($PIDFILE)"; return 0; }
-  local pid
-  pid=$(cat "$PIDFILE")
-  if ! kill -0 "$pid" 2>/dev/null; then
-    echo "not running (stale pidfile)"; rm -f "$PIDFILE"; return 0
+  if [[ -f "$PIDFILE" ]]; then
+    local pid
+    pid=$(cat "$PIDFILE")
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "stopping pid $pid ..."
+      kill -TERM "$pid" 2>/dev/null
+      for _ in $(seq 1 30); do
+        kill -0 "$pid" 2>/dev/null || { echo "stopped"; rm -f "$PIDFILE"; return 0; }
+        sleep 1
+      done
+      echo "still alive; SIGKILL"
+      kill -KILL "$pid" 2>/dev/null
+      rm -f "$PIDFILE"
+      return 0
+    fi
+    echo "stale pidfile"; rm -f "$PIDFILE"
   fi
-  echo "stopping pid $pid ..."
-  kill -TERM "$pid" 2>/dev/null
+
+  # No pidfile: the server was started by hand (or in another terminal). Find this
+  # build's binary by cmdline and stop it, so the workflow still works.
+  mapfile -t found < <(pgrep -f "$BIN" 2>/dev/null | grep -v -x -e "$$" -e "$PPID" || true)
+  if [[ ${#found[@]} -eq 0 ]]; then
+    echo "not running"
+    return 0
+  fi
+  echo "no pidfile; found ${#found[@]} $BIN process(es): ${found[*]}"
+  for pid in "${found[@]}"; do kill -TERM "$pid" 2>/dev/null; done
   for _ in $(seq 1 30); do
-    kill -0 "$pid" 2>/dev/null || { echo "stopped"; rm -f "$PIDFILE"; return 0; }
+    local alive=0
+    for pid in "${found[@]}"; do kill -0 "$pid" 2>/dev/null && alive=1; done
+    [[ "$alive" == "0" ]] && { echo "stopped"; return 0; }
     sleep 1
   done
-  echo "still alive; SIGKILL"
-  kill -KILL "$pid" 2>/dev/null
-  rm -f "$PIDFILE"
+  for pid in "${found[@]}"; do kill -KILL "$pid" 2>/dev/null; done
+  echo "stopped (SIGKILL)"
 }
 
 status_server() {
@@ -196,7 +244,8 @@ DAEMON=0
 for a in "$@"; do [[ "$a" == "--daemon" ]] && DAEMON=1; done
 
 case "$CMD" in
-  start)   preflight; if [[ "$DAEMON" == "1" ]]; then start_daemon; else start_foreground; fi ;;
+  start)   if [[ "${DRY_RUN:-0}" == "1" ]]; then build_args; printf '%q ' "$BIN" "${ARGS[@]}"; echo; exit 0; fi
+           preflight; if [[ "$DAEMON" == "1" ]]; then start_daemon; else start_foreground; fi ;;
   stop)    stop_server ;;
   restart) stop_server; preflight; start_daemon ;;
   status)  status_server ;;
